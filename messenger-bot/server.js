@@ -1,5 +1,5 @@
 require("dotenv").config();
-const fca = require("ws3-fca");
+const fca = require("@tas33n/ws3-fca");
 const fs = require("fs");
 const https = require("https");
 const http = require("http");
