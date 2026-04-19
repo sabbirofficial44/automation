@@ -832,13 +832,15 @@ function enqueue(threadID, task) {
 }
 
 // ============================================================
-// 📤 SEND
+// 📤 SEND - FIXED VERSION (no more sendTypingIndicator error)
 // ============================================================
 
 async function sendDelayed(api, text, threadID, isSingleUser = false) {
+  // Typing indicator - safe (no callback)
   try {
-    if (typeof api.sendTypingIndicator === "function")
-      api.sendTypingIndicator(threadID, () => {});
+    if (typeof api.sendTypingIndicator === "function") {
+      api.sendTypingIndicator(threadID);
+    }
   } catch (_) {}
 
   const delay = Math.min(
@@ -847,21 +849,28 @@ async function sendDelayed(api, text, threadID, isSingleUser = false) {
   );
   await new Promise((r) => setTimeout(r, delay));
 
+  // Send message using Promise to avoid callback hell
   try {
-    // isSingleUser=true হলে sendMessage.js-এ DM flow চালু হয়
-    // (specific_to_list + other_user_fbid set হয়, না হলে inbox-এ reply যায় না)
-    await api.sendMessage({ body: text }, threadID, null, isSingleUser);
+    await new Promise((resolve, reject) => {
+      api.sendMessage({ body: text }, threadID, (err, res) => {
+        if (err) reject(err);
+        else resolve(res);
+      });
+    });
     console.log(`   💬 Istia [${isSingleUser ? "DM" : "Group"}]: ${text}`);
   } catch (e) {
-    console.error("   ❌ Send failed:", e.message);
-    // Fallback: isSingleUser=true fail করলে without isSingleUser try করো
-    if (isSingleUser) {
-      try {
-        await api.sendMessage({ body: text }, threadID);
-        console.log(`   💬 Istia [DM-fallback]: ${text}`);
-      } catch (e2) {
-        console.error("   ❌ Fallback also failed:", e2.message);
-      }
+    console.error("   ❌ Send failed:", e.message || e);
+    // Fallback without isSingleUser (just in case)
+    try {
+      await new Promise((resolve, reject) => {
+        api.sendMessage({ body: text }, threadID, (err, res) => {
+          if (err) reject(err);
+          else resolve(res);
+        });
+      });
+      console.log(`   💬 Istia [${isSingleUser ? "DM" : "Group"} fallback]: ${text}`);
+    } catch (e2) {
+      console.error("   ❌ Fallback also failed:", e2.message);
     }
   }
 }
@@ -1105,6 +1114,52 @@ Object.entries(PROVIDERS).forEach(([k, v]) =>
 );
 console.log("\n📡 Fetching OpenRouter models...\n");
 
+// ============================================================
+// 🌐 ওয়েব সার্ভার (আপলোড ও হেলথ চেক) - ALWAYS ON (no condition)
+// ============================================================
+const express = require("express");
+const multer = require("multer");
+const upload = multer({ dest: "/tmp/uploads" });
+const webApp = express();
+const WEB_PORT = process.env.PORT || 3000;
+
+webApp.get("/", (req, res) => {
+  res.send("✅ Istia bot is alive. Use POST /upload with file (audio/image)");
+});
+
+webApp.post("/upload", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).send("No file");
+    const fileBuffer = fs.readFileSync(req.file.path);
+    let result = "";
+    const isAudio = req.file.mimetype.startsWith("audio/");
+    const isImage = req.file.mimetype.startsWith("image/");
+
+    if (isAudio) {
+      result = await transcribeAudio(fileBuffer, req.file.originalname);
+    } else if (isImage) {
+      const base64 = fileBuffer.toString("base64");
+      const mime = req.file.mimetype;
+      const dataUrl = `data:${mime};base64,${base64}`;
+      const prompt = req.body.prompt || "এই ছবিতে কী আছে বর্ণনা করো";
+      result = await analyzeImage(dataUrl, prompt);
+    } else {
+      result = "শুধু অডিও বা ইমেজ সাপোর্ট করে";
+    }
+    res.json({ success: true, text: result || "কিছু বুঝলাম না" });
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch (e) {}
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+webApp.listen(WEB_PORT, () => {
+  console.log(`🌐 Upload server running on port ${WEB_PORT}`);
+});
+
+// Now start the bot after web server is up
 fetchOpenRouterModels()
   .then(() => {
     let loginData;
@@ -1133,52 +1188,3 @@ fetchOpenRouterModels()
     console.error("Startup:", e.message);
     process.exit(1);
   });
-// ============================================================
-// 🌐 ওয়েব সার্ভার (আপলোড ও হেলথ চেক) — মূল কোড অপরিবর্তিত
-// ============================================================
-if (process.env.ENABLE_WEB === "true") {
-  const express = require("express");
-  const multer = require("multer");
-  const upload = multer({ dest: "/tmp/uploads" });
-  const webApp = express();
-  const WEB_PORT = process.env.PORT || 3000;
-
-  webApp.get("/", (req, res) => {
-    res.send("✅ Istia bot is alive. Use POST /upload with file (audio/image)");
-  });
-
-  webApp.post("/upload", upload.single("file"), async (req, res) => {
-    try {
-      if (!req.file) return res.status(400).send("No file");
-      const fileBuffer = require("fs").readFileSync(req.file.path);
-      let result = "";
-      const isAudio = req.file.mimetype.startsWith("audio/");
-      const isImage = req.file.mimetype.startsWith("image/");
-
-      if (isAudio) {
-        result = await transcribeAudio(fileBuffer, req.file.originalname);
-      } else if (isImage) {
-        // ইমেজ analyse করতে analyseImage ফাংশন ইউজ করি (ইউআরএল বানিয়ে)
-        const base64 = fileBuffer.toString("base64");
-        const mime = req.file.mimetype;
-        const dataUrl = `data:${mime};base64,${base64}`;
-        const prompt = req.body.prompt || "এই ছবিতে কী আছে বর্ণনা করো";
-        result = await analyseImage(dataUrl, prompt);
-      } else {
-        result = "শুধু অডিও বা ইমেজ সাপোর্ট করে";
-      }
-      res.json({ success: true, text: result || "কিছু বুঝলাম না" });
-      try {
-        require("fs").unlinkSync(req.file.path);
-      } catch (e) {}
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  webApp.listen(WEB_PORT, () => {
-    console.log(`🌐 Upload server running on port ${WEB_PORT}`);
-  });
-} else {
-  console.log("ℹ️ WEB server disabled (ENABLE_WEB not set to 'true')");
-}
