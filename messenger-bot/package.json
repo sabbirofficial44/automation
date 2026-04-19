@@ -2,9 +2,9 @@
   "name": "istia-fca-bot",
   "version": "1.0.0",
   "description": "Istia Facebook bot with web upload & health check",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "dotenv": "^16.0.3",
