@@ -3,8 +3,9 @@ const fca = require("ws3-fca");
 const fs = require("fs");
 const https = require("https");
 const http = require("http");
-const { execSync } = require("child_process");
 const path = require("path");
+const express = require("express");
+const multer = require("multer");
 
 const login = typeof fca === "function" ? fca : fca.login;
 
@@ -440,7 +441,7 @@ async function analyzeImage(imageUrl, userPrompt = "") {
 }
 
 // ============================================================
-// 🚀 PROVIDER CALLERS (unchanged)
+// 🚀 PROVIDER CALLERS
 // ============================================================
 
 async function callGroq(messages) {
@@ -638,7 +639,7 @@ function getSession(id) {
       lastSeen: 0,
       count: 0,
       mood: "neutral",
-      lastImageDesc: "", // 🆕 শেষ analyze করা image-এর description
+      lastImageDesc: "",
     });
   }
   return sessions.get(id);
@@ -690,7 +691,7 @@ const BAD = [
   /অবশ্যই|নিশ্চয়ই|প্রশ্ন\s+করুন/gi,
   /\*\*|__|##|```|<[^>]+>/g,
   /as an AI|I am an AI/gi,
-  /transcri|whisper|vision model|analyze/gi, // 🆕 backend শব্দ filter
+  /transcri|whisper|vision model|analyze/gi,
 ];
 
 function isValid(text) {
@@ -763,8 +764,6 @@ async function handleVoice(threadID, audioUrl, senderName) {
 
   if (!transcribed) return "কী বললে ঠিক বুঝলাম না 😅";
 
-  // Transcribed text দিয়ে normal reply flow চালাও
-  // session history-তে "[voice]" tag রাখা হচ্ছে context-এর জন্য
   const voiceNote = `[voice msg]: ${transcribed}`;
   return await getReply(threadID, voiceNote, senderName);
 }
@@ -777,11 +776,8 @@ async function handleImage(threadID, imageUrl, userCaption, senderName) {
   console.log(`   🖼️ Image received, analyzing...`);
   const s = getSession(threadID);
 
-  // যদি user caption দিয়ে image পাঠায় সেটা prompt হিসেবে use করো
-  // যেমন "eta ki?" বা "agerta moto?"
   let visionPrompt = "";
   if (userCaption) {
-    // আগের image description আছে কিনা check করো (comparison request)
     const isComparison = /আগের|আগেরটা|আগেরটার মতো|same|similar|মিল/i.test(
       userCaption,
     );
@@ -797,10 +793,8 @@ async function handleImage(threadID, imageUrl, userCaption, senderName) {
     return "ছবিটা ঠিকমতো দেখতে পাচ্ছি না 😅";
   }
 
-  // Save করো future comparison-এর জন্য
   s.lastImageDesc = imageDesc;
 
-  // Image description দিয়ে Istia character থেকে reply generate করো
   const contextMsg = `[image received, description: ${imageDesc}]${userCaption ? ` User said: "${userCaption}"` : ""}`;
 
   if (senderName && !s.name) s.name = senderName;
@@ -832,15 +826,13 @@ function enqueue(threadID, task) {
 }
 
 // ============================================================
-// 📤 SEND - FIXED VERSION (no more sendTypingIndicator error)
+// 📤 SEND - FIXED VERSION
 // ============================================================
 
 async function sendDelayed(api, text, threadID, isSingleUser = false) {
-  // Typing indicator - safe (no callback)
+  // টাইপিং ইন্ডিকেটর
   try {
-    if (typeof api.sendTypingIndicator === "function") {
-      api.sendTypingIndicator(threadID);
-    }
+    api.sendTypingIndicator(threadID);
   } catch (_) {}
 
   const delay = Math.min(
@@ -849,29 +841,17 @@ async function sendDelayed(api, text, threadID, isSingleUser = false) {
   );
   await new Promise((r) => setTimeout(r, delay));
 
-  // Send message using Promise to avoid callback hell
+  // মেসেজ পাঠানোর সঠিক সিনট্যাক্স (callback সহ)
   try {
-    await new Promise((resolve, reject) => {
-      api.sendMessage({ body: text }, threadID, (err, res) => {
-        if (err) reject(err);
-        else resolve(res);
-      });
+    api.sendMessage({ body: text }, threadID, (err, messageInfo) => {
+      if (err) {
+        console.error("   ❌ Send failed:", err.message);
+      } else {
+        console.log(`   💬 Istia [${isSingleUser ? "DM" : "Group"}]: ${text}`);
+      }
     });
-    console.log(`   💬 Istia [${isSingleUser ? "DM" : "Group"}]: ${text}`);
   } catch (e) {
-    console.error("   ❌ Send failed:", e.message || e);
-    // Fallback without isSingleUser (just in case)
-    try {
-      await new Promise((resolve, reject) => {
-        api.sendMessage({ body: text }, threadID, (err, res) => {
-          if (err) reject(err);
-          else resolve(res);
-        });
-      });
-      console.log(`   💬 Istia [${isSingleUser ? "DM" : "Group"} fallback]: ${text}`);
-    } catch (e2) {
-      console.error("   ❌ Fallback also failed:", e2.message);
-    }
+    console.error("   ❌ Exception in sendMessage:", e.message);
   }
 }
 
@@ -925,7 +905,6 @@ function startBot(api) {
   );
   console.log(`👂 Listening...\n`);
 
-  // ws3-fca inbox fix: userAgent না দিলে inbox event ঠিকমতো আসে না
   api.setOptions({
     listenEvents: true,
     selfListen: false,
@@ -937,7 +916,6 @@ function startBot(api) {
 
   let reconnecting = false;
 
-  // handleEvent: group + inbox দুটোই handle করে
   async function handleEvent(event) {
     if (event.type !== "message" && event.type !== "message_reply") return;
 
@@ -945,7 +923,6 @@ function startBot(api) {
     const attachments = event.attachments || [];
     if (!body && !attachments.length) return;
 
-    // DEDUP
     const msgKey =
       event.messageID ||
       `${event.threadID}_${body}_${Math.floor(Date.now() / 10000)}`;
@@ -958,9 +935,6 @@ function startBot(api) {
     const senderID = String(event.senderID || event.author || "");
     if (!senderID || (BOT_ID && senderID === BOT_ID)) return;
 
-    // Chat type detect
-    // ws3-fca: event.isGroup=true → group, false/undefined → DM (inbox)
-    // newer versions-এ threadType: "USER"=DM, "GROUP"=group
     const isGroup = !!(
       event.isGroup === true ||
       event.threadType === "GROUP" ||
@@ -968,7 +942,6 @@ function startBot(api) {
     );
     const isSingleUser = !isGroup;
 
-    // threadID: DM-এ সবসময় event.threadID থাকে, না থাকলে senderID fallback
     const threadID =
       String(
         event.threadID || event.thread_fbid || (!isGroup ? senderID : ""),
@@ -978,7 +951,6 @@ function startBot(api) {
       return;
     }
 
-    // Attachment detect
     const voiceAtt = attachments.find(
       (a) =>
         a.type === "audio" ||
@@ -1063,7 +1035,6 @@ function startBot(api) {
       return;
     }
 
-    // RAW debug — inbox troubleshoot করতে কাজে লাগবে
     if (event.type === "message" || event.type === "message_reply") {
       console.log(
         `📦 type=${event.type} isGroup=${event.isGroup} threadType=${event.threadType} tid=...${String(event.threadID || "").slice(-6)} sid=...${String(event.senderID || "").slice(-6)}`,
@@ -1073,7 +1044,6 @@ function startBot(api) {
     await handleEvent(event);
   });
 
-  // Periodic tasks (unchanged)
   setInterval(
     () => {
       try {
@@ -1105,29 +1075,18 @@ function startBot(api) {
 }
 
 // ============================================================
-// 🚀 START
+// 🌐 WEB SERVER FOR RENDER (ALWAYS ON)
 // ============================================================
 
-console.log("🚀 Istia Bot starting...");
-Object.entries(PROVIDERS).forEach(([k, v]) =>
-  console.log(`  ${v.name}: ${keyStates[k]?.length || 0} keys`),
-);
-console.log("\n📡 Fetching OpenRouter models...\n");
-
-// ============================================================
-// 🌐 ওয়েব সার্ভার (আপলোড ও হেলথ চেক) - ALWAYS ON (no condition)
-// ============================================================
-const express = require("express");
-const multer = require("multer");
+const app = express();
 const upload = multer({ dest: "/tmp/uploads" });
-const webApp = express();
 const WEB_PORT = process.env.PORT || 3000;
 
-webApp.get("/", (req, res) => {
+app.get("/", (req, res) => {
   res.send("✅ Istia bot is alive. Use POST /upload with file (audio/image)");
 });
 
-webApp.post("/upload", upload.single("file"), async (req, res) => {
+app.post("/upload", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).send("No file");
     const fileBuffer = fs.readFileSync(req.file.path);
@@ -1147,19 +1106,26 @@ webApp.post("/upload", upload.single("file"), async (req, res) => {
       result = "শুধু অডিও বা ইমেজ সাপোর্ট করে";
     }
     res.json({ success: true, text: result || "কিছু বুঝলাম না" });
-    try {
-      fs.unlinkSync(req.file.path);
-    } catch (e) {}
+    try { fs.unlinkSync(req.file.path); } catch(e) {}
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-webApp.listen(WEB_PORT, () => {
+app.listen(WEB_PORT, () => {
   console.log(`🌐 Upload server running on port ${WEB_PORT}`);
 });
 
-// Now start the bot after web server is up
+// ============================================================
+// 🚀 START BOT
+// ============================================================
+
+console.log("🚀 Istia Bot starting...");
+Object.entries(PROVIDERS).forEach(([k, v]) =>
+  console.log(`  ${v.name}: ${keyStates[k]?.length || 0} keys`),
+);
+console.log("\n📡 Fetching OpenRouter models...\n");
+
 fetchOpenRouterModels()
   .then(() => {
     let loginData;
