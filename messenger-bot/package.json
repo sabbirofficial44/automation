@@ -1,25 +1,18 @@
 {
-  "name": "istia-fca-bot",
+  "name": "istia-bot",
   "version": "1.0.0",
-  "description": "Istia Facebook bot with web upload",
+  "description": "Istia - Facebook Messenger Bot with AI",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
     "multer": "^1.4.5-lts.1",
-    "ws3-fca": "github:NTKhang/ws3-fca",
-    "npmlog": "^7.0.1"
+    "ws3-fca": "latest"
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "overrides": {
-    "follow-redirects": "^1.15.6",
-    "semver": "^7.6.0",
-    "qs": "^6.12.1",
-    "cross-spawn": "^7.0.3"
   }
 }
