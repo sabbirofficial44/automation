@@ -1742,53 +1742,17 @@ async function sendDelayed(api, text, threadID, isSingle = false) {
 // PAGE WEBHOOK SERVER
 // ============================================================
 
-function startWebhookServer() {
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, `http://localhost`);
-
-    if (req.method === "GET" && url.pathname === "/webhook") {
-      const mode = url.searchParams.get("hub.mode");
-      const token = url.searchParams.get("hub.verify_token");
-      const challenge = url.searchParams.get("hub.challenge");
-      if (mode === "subscribe" && token === CFG.verifyToken) {
-        console.log("✅ Webhook verified!");
-        res.writeHead(200);
-        res.end(challenge);
-      } else {
-        res.writeHead(403);
-        res.end("Forbidden");
-      }
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/webhook") {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", async () => {
-        res.writeHead(200, { "Content-Type": "text/plain" });
-        res.end("EVENT_RECEIVED");
-        try {
-          const data = JSON.parse(body);
-          if (data.object !== "page") return;
-          for (const entry of data.entry || []) {
-            for (const event of entry.messaging || [])
-              await handlePageMessengerEvent(event);
-            for (const change of entry.changes || [])
-              await handlePageFeedEvent(change);
-          }
-        } catch (e) {
-          console.log("⚠️ Webhook:", e.message);
-        }
-      });
-      return;
-    }
-
-    res.writeHead(200);
-    res.end("Istia Bot OK");
+// ============================================================
+// ✅ Render-এর জন্য বাধ্যতামূলক HTTP সার্ভার (সবসময় চালু থাকবে)
+// ============================================================
+function startHealthServer() {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Istia Bot Running');
   });
-
-  server.listen(CFG.webhookPort, () => {
-    console.log(`🌐 Webhook: port ${CFG.webhookPort}`);
+  const port = process.env.PORT || 3000;
+  server.listen(port, () => {
+    console.log(`✅ Health check server listening on port ${port}`);
   });
 }
 
