@@ -1133,3 +1133,52 @@ fetchOpenRouterModels()
     console.error("Startup:", e.message);
     process.exit(1);
   });
+// ============================================================
+// 🌐 ওয়েব সার্ভার (আপলোড ও হেলথ চেক) — মূল কোড অপরিবর্তিত
+// ============================================================
+if (process.env.ENABLE_WEB === "true") {
+  const express = require("express");
+  const multer = require("multer");
+  const upload = multer({ dest: "/tmp/uploads" });
+  const webApp = express();
+  const WEB_PORT = process.env.PORT || 3000;
+
+  webApp.get("/", (req, res) => {
+    res.send("✅ Istia bot is alive. Use POST /upload with file (audio/image)");
+  });
+
+  webApp.post("/upload", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).send("No file");
+      const fileBuffer = require("fs").readFileSync(req.file.path);
+      let result = "";
+      const isAudio = req.file.mimetype.startsWith("audio/");
+      const isImage = req.file.mimetype.startsWith("image/");
+
+      if (isAudio) {
+        result = await transcribeAudio(fileBuffer, req.file.originalname);
+      } else if (isImage) {
+        // ইমেজ analyse করতে analyseImage ফাংশন ইউজ করি (ইউআরএল বানিয়ে)
+        const base64 = fileBuffer.toString("base64");
+        const mime = req.file.mimetype;
+        const dataUrl = `data:${mime};base64,${base64}`;
+        const prompt = req.body.prompt || "এই ছবিতে কী আছে বর্ণনা করো";
+        result = await analyseImage(dataUrl, prompt);
+      } else {
+        result = "শুধু অডিও বা ইমেজ সাপোর্ট করে";
+      }
+      res.json({ success: true, text: result || "কিছু বুঝলাম না" });
+      try {
+        require("fs").unlinkSync(req.file.path);
+      } catch (e) {}
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  webApp.listen(WEB_PORT, () => {
+    console.log(`🌐 Upload server running on port ${WEB_PORT}`);
+  });
+} else {
+  console.log("ℹ️ WEB server disabled (ENABLE_WEB not set to 'true')");
+}
